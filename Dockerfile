@@ -70,7 +70,18 @@ RUN wget -q -O /comfyui/models/clip_vision/clip_vision_h.safetensors \
     "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/clip_vision/clip_vision_h.safetensors" && \
     echo "CLIP Vision: $(ls -lh /comfyui/models/clip_vision/clip_vision_h.safetensors)"
 
-# 8. Copiar scripts customizados
+# 8. Configurar extra_model_paths.yaml para usar modelos do volume
+RUN echo 'wan22_volume:' > /comfyui/extra_model_paths.yaml && \
+    echo '  base_path: /runpod-volume/wan22_gguf_5b_models' >> /comfyui/extra_model_paths.yaml && \
+    echo '  diffusion_models: unet' >> /comfyui/extra_model_paths.yaml && \
+    echo '  vae: vae' >> /comfyui/extra_model_paths.yaml && \
+    echo '  text_encoders: text_encoders' >> /comfyui/extra_model_paths.yaml && \
+    echo '  clip_vision: clip_vision' >> /comfyui/extra_model_paths.yaml && \
+    echo '  clip: text_encoders' >> /comfyui/extra_model_paths.yaml && \
+    echo '' >> /comfyui/extra_model_paths.yaml && \
+    cat /comfyui/extra_model_paths.yaml
+
+# 9. Copiar scripts customizados
 RUN if [ -f /start.sh ]; then mv /start.sh /start.sh.original; fi
 RUN if [ -f /handler.py ]; then mv /handler.py /handler.py.original; fi
 
@@ -78,7 +89,7 @@ COPY handler.py /handler.py
 COPY start.sh /start.sh
 RUN chmod +x /start.sh
 
-# 9. Teste de imports
+# 10. Teste de imports
 RUN python -c "import gguf; print('OK: gguf')" || echo "AVISO: gguf falhou"
 
 CMD ["/start.sh"]
