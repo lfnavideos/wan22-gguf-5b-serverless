@@ -1,7 +1,13 @@
 # -*- coding: utf-8 -*-
 """
-Custom Handler for Wan 2.2 + LightX2V
-Supports video outputs from ComfyUI VHS_VideoCombine node
+Custom Handler for Wan 2.2 TI2V 5B GGUF
+Supports both full workflow and simplified API
+
+Simplified API:
+  - T2V: {"prompt": "...", "negative_prompt": "..."}
+  - I2V: {"prompt": "...", "image": "base64..."}
+
+Optional params: width, height, num_frames, steps, cfg, seed, frame_rate
 """
 
 import os
@@ -11,9 +17,231 @@ import base64
 import glob
 import requests
 import runpod
+import random
 
 COMFY_OUTPUT_PATH = os.environ.get('COMFY_OUTPUT_PATH', '/comfyui/output')
 COMFY_API_URL = os.environ.get('COMFY_API_URL', 'http://127.0.0.1:8188')
+
+# Default settings
+DEFAULTS = {
+    'width': 512,
+    'height': 768,
+    'num_frames': 25,
+    'steps': 20,
+    'cfg': 5.0,
+    'shift': 8.0,
+    'frame_rate': 12,
+    'negative_prompt': 'blurry, low quality, distorted'
+}
+
+
+def build_t2v_workflow(params):
+    """Build Text-to-Video workflow from simple params"""
+    width = params.get('width', DEFAULTS['width'])
+    height = params.get('height', DEFAULTS['height'])
+    num_frames = params.get('num_frames', DEFAULTS['num_frames'])
+    steps = params.get('steps', DEFAULTS['steps'])
+    cfg = params.get('cfg', DEFAULTS['cfg'])
+    shift = params.get('shift', DEFAULTS['shift'])
+    seed = params.get('seed', random.randint(0, 2**32-1))
+    frame_rate = params.get('frame_rate', DEFAULTS['frame_rate'])
+    prompt = params.get('prompt', '')
+    negative = params.get('negative_prompt', DEFAULTS['negative_prompt'])
+
+    return {
+        "10": {
+            "class_type": "WanVideoModelLoader",
+            "inputs": {
+                "model": "Wan2.2-TI2V-5B-Q4_K_M.gguf",
+                "base_precision": "fp16",
+                "quantization": "disabled",
+                "load_device": "main_device"
+            }
+        },
+        "11": {
+            "class_type": "LoadWanVideoT5TextEncoder",
+            "inputs": {
+                "model_name": "umt5-xxl-enc-fp8_e4m3fn.safetensors",
+                "precision": "bf16"
+            }
+        },
+        "12": {
+            "class_type": "WanVideoVAELoader",
+            "inputs": {
+                "model_name": "Wan2.2_VAE.safetensors",
+                "precision": "fp16"
+            }
+        },
+        "20": {
+            "class_type": "WanVideoTextEncode",
+            "inputs": {
+                "t5": ["11", 0],
+                "positive_prompt": prompt,
+                "negative_prompt": negative
+            }
+        },
+        "25": {
+            "class_type": "WanVideoEmptyEmbeds",
+            "inputs": {
+                "width": width,
+                "height": height,
+                "num_frames": num_frames
+            }
+        },
+        "30": {
+            "class_type": "WanVideoSampler",
+            "inputs": {
+                "model": ["10", 0],
+                "text_embeds": ["20", 0],
+                "image_embeds": ["25", 0],
+                "steps": steps,
+                "cfg": cfg,
+                "shift": shift,
+                "seed": seed,
+                "scheduler": "euler",
+                "riflex_freq_index": 0,
+                "force_offload": True
+            }
+        },
+        "40": {
+            "class_type": "WanVideoDecode",
+            "inputs": {
+                "vae": ["12", 0],
+                "samples": ["30", 0],
+                "enable_vae_tiling": True,
+                "tile_x": 256,
+                "tile_y": 256,
+                "tile_stride_x": 192,
+                "tile_stride_y": 192
+            }
+        },
+        "50": {
+            "class_type": "VHS_VideoCombine",
+            "inputs": {
+                "images": ["40", 0],
+                "frame_rate": frame_rate,
+                "loop_count": 0,
+                "filename_prefix": "wan22_t2v",
+                "format": "video/h264-mp4",
+                "pingpong": False,
+                "save_output": True
+            }
+        }
+    }
+
+
+def build_i2v_workflow(params, image_filename):
+    """Build Image-to-Video workflow from simple params"""
+    width = params.get('width', DEFAULTS['width'])
+    height = params.get('height', DEFAULTS['height'])
+    num_frames = params.get('num_frames', DEFAULTS['num_frames'])
+    steps = params.get('steps', DEFAULTS['steps'])
+    cfg = params.get('cfg', DEFAULTS['cfg'])
+    shift = params.get('shift', DEFAULTS['shift'])
+    seed = params.get('seed', random.randint(0, 2**32-1))
+    frame_rate = params.get('frame_rate', DEFAULTS['frame_rate'])
+    prompt = params.get('prompt', '')
+    negative = params.get('negative_prompt', DEFAULTS['negative_prompt'])
+
+    return {
+        "10": {
+            "class_type": "WanVideoModelLoader",
+            "inputs": {
+                "model": "Wan2.2-TI2V-5B-Q4_K_M.gguf",
+                "base_precision": "fp16",
+                "quantization": "disabled",
+                "load_device": "main_device"
+            }
+        },
+        "11": {
+            "class_type": "LoadWanVideoT5TextEncoder",
+            "inputs": {
+                "model_name": "umt5-xxl-enc-fp8_e4m3fn.safetensors",
+                "precision": "bf16"
+            }
+        },
+        "12": {
+            "class_type": "WanVideoVAELoader",
+            "inputs": {
+                "model_name": "Wan2.2_VAE.safetensors",
+                "precision": "fp16"
+            }
+        },
+        "14": {
+            "class_type": "LoadImage",
+            "inputs": {
+                "image": image_filename
+            }
+        },
+        "15": {
+            "class_type": "WanVideoEncode",
+            "inputs": {
+                "vae": ["12", 0],
+                "image": ["14", 0],
+                "enable_vae_tiling": True,
+                "tile_x": 256,
+                "tile_y": 256,
+                "tile_stride_x": 192,
+                "tile_stride_y": 192
+            }
+        },
+        "20": {
+            "class_type": "WanVideoTextEncode",
+            "inputs": {
+                "t5": ["11", 0],
+                "positive_prompt": prompt,
+                "negative_prompt": negative
+            }
+        },
+        "25": {
+            "class_type": "WanVideoEmptyEmbeds",
+            "inputs": {
+                "width": width,
+                "height": height,
+                "num_frames": num_frames,
+                "extra_latents": ["15", 0]
+            }
+        },
+        "30": {
+            "class_type": "WanVideoSampler",
+            "inputs": {
+                "model": ["10", 0],
+                "text_embeds": ["20", 0],
+                "image_embeds": ["25", 0],
+                "steps": steps,
+                "cfg": cfg,
+                "shift": shift,
+                "seed": seed,
+                "scheduler": "euler",
+                "riflex_freq_index": 0,
+                "force_offload": True
+            }
+        },
+        "40": {
+            "class_type": "WanVideoDecode",
+            "inputs": {
+                "vae": ["12", 0],
+                "samples": ["30", 0],
+                "enable_vae_tiling": True,
+                "tile_x": 256,
+                "tile_y": 256,
+                "tile_stride_x": 192,
+                "tile_stride_y": 192
+            }
+        },
+        "50": {
+            "class_type": "VHS_VideoCombine",
+            "inputs": {
+                "images": ["40", 0],
+                "frame_rate": frame_rate,
+                "loop_count": 0,
+                "filename_prefix": "wan22_i2v",
+                "format": "video/h264-mp4",
+                "pingpong": False,
+                "save_output": True
+            }
+        }
+    }
 
 
 def wait_for_comfyui(timeout=120):
@@ -92,12 +320,38 @@ def handler(event):
     # Record start time for video detection
     start_time = time.time()
 
-    # Get workflow
+    # Check for workflow or simplified API
     workflow = job_input.get('workflow')
-    if not workflow:
-        return {'error': 'No workflow provided', 'status': 'FAILED'}
-
     images = job_input.get('images', [])
+    image_filename = None
+
+    if not workflow:
+        # Simplified API mode
+        prompt = job_input.get('prompt')
+        if not prompt:
+            return {'error': 'No workflow or prompt provided', 'status': 'FAILED'}
+
+        image_b64 = job_input.get('image')
+
+        if image_b64:
+            # I2V mode - save image first
+            image_filename = f'input_{job_id}.png'
+            try:
+                img_bytes = base64.b64decode(image_b64)
+                img_path = f'/comfyui/input/{image_filename}'
+                os.makedirs(os.path.dirname(img_path), exist_ok=True)
+                with open(img_path, 'wb') as f:
+                    f.write(img_bytes)
+                print(f"[HANDLER] Saved input image: {img_path}")
+            except Exception as e:
+                return {'error': f'Failed to save input image: {e}', 'status': 'FAILED'}
+
+            workflow = build_i2v_workflow(job_input, image_filename)
+            print(f"[HANDLER] Built I2V workflow")
+        else:
+            # T2V mode
+            workflow = build_t2v_workflow(job_input)
+            print(f"[HANDLER] Built T2V workflow")
 
     # Wait for ComfyUI to be ready
     if not wait_for_comfyui(timeout=120):
