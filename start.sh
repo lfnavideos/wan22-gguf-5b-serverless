@@ -1,6 +1,6 @@
 #!/bin/bash
 echo "========================================"
-echo "[WAN22-GGUF-5B] WORKER v3.0 - TI2V 5B"
+echo "[WAN22-GGUF-5B] WORKER v3.1 - TI2V 5B"
 echo "========================================"
 
 # ===========================================
@@ -13,18 +13,15 @@ echo "Conteudo de /runpod-volume:"
 ls -la /runpod-volume/ 2>/dev/null || echo "  Volume NAO montado!"
 
 MODELS_PATH="/runpod-volume/wan22_gguf_5b_models"
+SHARED_MODELS="/runpod-volume/wan22_models"
 
-if [ -d "$MODELS_PATH" ]; then
-    echo ""
-    echo "Modelos encontrados em: $MODELS_PATH"
-    echo "Estrutura:"
-    ls -la $MODELS_PATH/
-else
-    echo ""
-    echo "ERRO: $MODELS_PATH nao existe!"
-    echo "Procurando .gguf..."
-    find /runpod-volume -name "*.gguf" 2>/dev/null | head -5
-fi
+echo ""
+echo "Modelos GGUF: $MODELS_PATH"
+ls -la $MODELS_PATH/ 2>/dev/null || echo "  Nao encontrado"
+
+echo ""
+echo "Modelos compartilhados: $SHARED_MODELS"
+ls -la $SHARED_MODELS/ 2>/dev/null || echo "  Nao encontrado"
 
 # ===========================================
 # FASE 2: Criar symlinks
@@ -40,51 +37,53 @@ mkdir -p /comfyui/models/text_encoders
 mkdir -p /comfyui/models/clip_vision
 mkdir -p /comfyui/models/clip
 
-# Funcao para linkar arquivos de um diretorio
-link_files() {
-    local source_dir="$1"
-    local target_dir="$2"
-    local desc="$3"
+# Funcao para linkar arquivo individual
+link_file() {
+    local source="$1"
+    local target="$2"
 
-    echo ""
-    echo "[$desc]"
-
-    if [ -d "$source_dir" ]; then
-        # Resolver symlinks no diretorio fonte
-        for file in "$source_dir"/*; do
-            if [ -e "$file" ] || [ -L "$file" ]; then
-                filename=$(basename "$file")
-                # Se for symlink, seguir para o arquivo real
-                if [ -L "$file" ]; then
-                    real_file=$(readlink -f "$file")
-                    echo "  Linkando (via symlink): $filename"
-                    ln -sf "$real_file" "$target_dir/$filename"
-                else
-                    echo "  Linkando: $filename"
-                    ln -sf "$file" "$target_dir/$filename"
-                fi
-            fi
-        done
-        echo "  Resultado:"
-        ls -lh "$target_dir/" 2>/dev/null | head -5
+    if [ -e "$source" ]; then
+        # Resolver symlink se necessario
+        if [ -L "$source" ]; then
+            source=$(readlink -f "$source")
+        fi
+        echo "  $target <- $source"
+        ln -sf "$source" "$target"
     else
-        echo "  Diretorio fonte nao existe: $source_dir"
+        echo "  AVISO: $source nao existe"
     fi
 }
 
-# UNET/Diffusion Models (GGUF)
-link_files "$MODELS_PATH/unet" "/comfyui/models/unet" "UNET (GGUF)"
-link_files "$MODELS_PATH/unet" "/comfyui/models/diffusion_models" "Diffusion Models"
+# === UNET (GGUF) ===
+echo ""
+echo "[UNET - GGUF]"
+link_file "$MODELS_PATH/unet/Wan2.2-TI2V-5B-Q4_K_M.gguf" "/comfyui/models/unet/Wan2.2-TI2V-5B-Q4_K_M.gguf"
+link_file "$MODELS_PATH/unet/Wan2.2-TI2V-5B-Q4_K_M.gguf" "/comfyui/models/diffusion_models/Wan2.2-TI2V-5B-Q4_K_M.gguf"
 
-# VAE
-link_files "$MODELS_PATH/vae" "/comfyui/models/vae" "VAE"
+# === VAE ===
+echo ""
+echo "[VAE]"
+link_file "$MODELS_PATH/vae/Wan2.2_VAE.safetensors" "/comfyui/models/vae/Wan2.2_VAE.safetensors"
 
-# Text Encoders
-link_files "$MODELS_PATH/text_encoders" "/comfyui/models/text_encoders" "Text Encoders"
-link_files "$MODELS_PATH/text_encoders" "/comfyui/models/clip" "CLIP (Text Encoders)"
+# === TEXT ENCODERS ===
+echo ""
+echo "[TEXT ENCODERS]"
+# Usar do caminho original se o symlink nao funcionar
+if [ -e "$SHARED_MODELS/text_encoders/umt5-xxl-enc-fp8_e4m3fn.safetensors" ]; then
+    link_file "$SHARED_MODELS/text_encoders/umt5-xxl-enc-fp8_e4m3fn.safetensors" "/comfyui/models/text_encoders/umt5-xxl-enc-fp8_e4m3fn.safetensors"
+else
+    link_file "$MODELS_PATH/text_encoders/umt5-xxl-enc-fp8_e4m3fn.safetensors" "/comfyui/models/text_encoders/umt5-xxl-enc-fp8_e4m3fn.safetensors"
+fi
 
-# CLIP Vision
-link_files "$MODELS_PATH/clip" "/comfyui/models/clip_vision" "CLIP Vision"
+# === CLIP VISION ===
+echo ""
+echo "[CLIP VISION]"
+# Usar do caminho original
+if [ -e "$SHARED_MODELS/clip/sigclip_vision_patch14_384.safetensors" ]; then
+    link_file "$SHARED_MODELS/clip/sigclip_vision_patch14_384.safetensors" "/comfyui/models/clip_vision/sigclip_vision_patch14_384.safetensors"
+else
+    link_file "$MODELS_PATH/clip/sigclip_vision_patch14_384.safetensors" "/comfyui/models/clip_vision/sigclip_vision_patch14_384.safetensors"
+fi
 
 # ===========================================
 # FASE 3: Verificacao final
